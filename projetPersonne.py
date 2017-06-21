@@ -65,7 +65,24 @@ for f in files:
     i=i+1
     j=j+1
   
+#Entrainement du classifieur 
+clf = svm.SVC(kernel='linear', C=1)
+clf.fit(windows,label)
+results = []
 
+#Prédictions sur les images de test
+for f in filesTest:
+    img = util.img_as_float(color.rgb2gray(io.imread(pathTest + "\\" + f)))
+    for rc in rescales:
+        size = (math.floor(img.shape[0]*rc), math.floor(img.shape[1]*rc))
+        imgrs = transform.resize(img,size,mode='constant',order=0)
+        for X in np.arange(0,img.shape[1]-widthWindow,stepW):
+            for Y in np.arange(0,img.shape[0]-heightWindow,stepH):
+                window = extractWindow(imgrs,X,Y)
+                predict = clf.predict(window)
+                if predict == 1:
+                    filenum = f.split('.')[0]
+                    results.append([filenum,math.floor(X/rc),math.floor(Y/rc,math.floor(widthWindow/rc),math.floor(heightWindow/rc))])
 
 
 """
