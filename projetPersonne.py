@@ -13,6 +13,7 @@ from sklearn import svm
 from sklearn import metrics
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import ShuffleSplit
+from sklearn.utils import shuffle
 from skimage import io, util, color, feature, transform
 import os, os.path
 from PIL import ImageDraw
@@ -25,17 +26,24 @@ pathTrain = path+"\\train"
 pathTest = path+"\\test"
 
 #Parameters
-heightWindow = 140
-widthWindow = 60
-nbStepW = 8
-nbStepH = 12
-nbWindows = 4
-rescales = np.arange(1/6,8/6,1/6)
-rescalesTest = np.arange(1/6,8/6,1/6)
+heightWindow = 160
+widthWindow = 70
+nbStepW = 7
+nbStepH = 9
+nbWindows = 2
+rescales = np.arange(0.5,2,0.5)
+rescalesTrain = np.arange(1/6,1.5,1/6)
+rescalesTest = np.arange(1/6,1.5,1/6)
+seuilDetect = 0.7
+#Hog params
+orientation = 8
+pixelPerCell= (16,16)
+cellsPerBlock = (1,1)
 
-
+#Extrait une sous image à partir de l'image passé en paramètre
 def extractWindow(im,x,y):
     window = im[y:(y+heightWindow),x:(x+widthWindow)]
+    window = feature.hog(window, orientations=orientation, pixels_per_cell=pixelPerCell,cells_per_block=cellsPerBlock, visualise=True)[1]
     window = window.reshape(widthWindow*heightWindow)
     return window
     
@@ -51,7 +59,7 @@ with open(path+'\\label.txt') as f:
 vect = vect.astype(int)
 n = len(files)*nbWindows*len(rescales)+len(files)
 windows = np.zeros((n,heightWindow*widthWindow))
-label = np.concatenate((-1*np.ones((len(files)*nbWindows*len(rescales))),np.ones(len(files))),axis=0)
+label = np.concatenate((-1*np.ones((len(files)*nbWindows*len(rescales))),5*np.ones(len(files))),axis=0)
 i = 0
 j = 0
 #On créé et stocke des fenetres de taille différente aléatoires pour faire des exemples négatifs et positifs
@@ -70,22 +78,78 @@ for f in files:
     currLabel = vect[j]
     window = img[currLabel[2]:currLabel[2]+currLabel[4],currLabel[1]:currLabel[1]+currLabel[3]]
     window = transform.resize(window,(heightWindow,widthWindow),mode='constant' ,order=0)
+    window = feature.hog(window, orientations=orientation, pixels_per_cell=pixelPerCell,cells_per_block=cellsPerBlock, visualise=True)[1]
     windows[j+len(files)*nbWindows*len(rescales)] = window.reshape(widthWindow*heightWindow)
     j=j+1
 
-print("Fake windows done")
+print("First windows done")
 #On ajoute les exemples positifs
-
+print("Starting first training")
 #Entrainement du classifieur 
-clf = svm.SVC(kernel='linear', C=1)
+clf = svm.SVC(kernel='linear', probability=True,C=1)
 n_samples = windows.shape[0]
-cv = ShuffleSplit(n_splits=5, test_size=0.3, random_state=0)
-cross_val_score(clf, windows, label, cv=cv)
+#cv = ShuffleSplit(n_splits=5, test_size=0.3, random_state=0)
+#cross_val_score(clf, windows, label, cv=cv)
+windows, label = shuffle(windows,label, random_state=0)
+clf.fit(windows,label)
+fakeWindows = []
+
+print("First Training Done")
+i = 0
+j = 0
+print("Starting false positives detection")
+#Prédictions négatives sur les images de test
+for f in files:
+    img = util.img_as_float(color.rgb2gray(io.imread(pathTrain + "\\" + f)))
+    currLabel = vect[j]
+    print(f)
+    for rc in rescalesTrain:
+        size = (math.floor(img.shape[0]*rc), math.floor(img.shape[1]*rc))
+        if(size[0]<heightWindow or size[1]<widthWindow):
+            size=(heightWindow,widthWindow)
+        imgrs = transform.resize(img,size,mode='constant',order=0)
+        stepX = math.floor((imgrs.shape[0]-heightWindow)/nbStepH)
+        if (stepX==0):
+            stepX=1
+        for X in np.arange(0,imgrs.shape[1]-widthWindow,stepX):
+            stepY = math.floor((imgrs.shape[0]-heightWindow)/nbStepH)
+            if (stepY==0):
+                stepY=1
+            for Y in np.arange(0,imgrs.shape[0]-heightWindow,stepY):
+                window = [extractWindow(imgrs,X,Y)]
+                predict = clf.predict_proba(window)[0,1]
+                if predict > seuilDetect:
+                    labelRescaled = rc * currLabel[1:5]
+                    airCommun = abs(X+widthWindow-labelRescaled[0]) * abs(Y+heightWindow-labelRescaled[1])
+                    airLabel = labelRescaled[2] * labelRescaled[3]
+                    
+                    if(airCommun <= 0.8 * airLabel):
+                        fakeWindows.append(window[0])
+                        #filenum = f.split('.')[0]
+                        #results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc)])
+    j=j+1
+     
+fakeWindows = np.asarray(fakeWindows)
+windows = np.concatenate((windows,fakeWindows))
+labelFake = -1*np.ones((len(fakeWindows)))
+label = np.concatenate((label,labelFake))
+print("False positives added")
+print("Training new classifier")
+
+clf = svm.SVC(kernel='linear', probability=True,C=1)
+n_samples = windows.shape[0]
+#cv = ShuffleSplit(n_splits=5, test_size=0.3, random_state=0)
+#cross_val_score(clf, windows, label, cv=cv)
+windows, label = shuffle(windows,label, random_state=0)
 clf.fit(windows,label)
 results = []
 
-print("Training Done")
-#Prédictions sur les images de test
+
+print("Training done")
+print("Starting detection on test images")
+
+#Prédictions négatives sur les images de test
+
 for f in filesTest:
     img = util.img_as_float(color.rgb2gray(io.imread(pathTest + "\\" + f)))
     print(f)
@@ -103,10 +167,15 @@ for f in filesTest:
                 stepY=1
             for Y in np.arange(0,imgrs.shape[0]-heightWindow,stepY):
                 window = [extractWindow(imgrs,X,Y)]
-                predict = clf.predict(window)
-                if predict == 1:
+                predict = clf.predict_proba(window)[0,1]
+                if predict > seuilDetect:
                     filenum = f.split('.')[0]
-                    results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc)])
+                    results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc),predict])
+
+print("Detection done !")
+
+
+
 def displayim(pathIm,lab):
     im = Image.open(pathIm)
     imdr = ImageDraw.Draw(im)
@@ -119,3 +188,51 @@ def displayim(pathIm,lab):
 for i in np.arange(0,len(results)):
     displayim(pathTest+'\\'+results[i][0]+".jpg",results[i])
 """
+def aRecouv(bi,bj):
+    maxgauche=max(bi[1],bj[1])
+    mindroit=min(bi[1]+bi[3],bj[1]+bj[3])
+    minhaut=max(bi[2],bj[2])
+    maxbas=min(bi[2]+bi[4],bj[2]+bj[4])
+    if(maxgauche<mindroit and minhaut<maxbas):
+        intersect = (mindroit-maxgauche)*(maxbas-minhaut)
+        union = (bi[3]*bi[4])+(bj[3]*bj[4])-intersect
+        if(intersect/union>0.5):
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+def addFinal(temp,final):
+    temp = sorted(temp,reverse=True,key=lambda x: x[5])
+    k = 1
+    for j in np.arange(1,len(temp)):
+        if(aRecouv(temp[j-k],temp[j]) == 0):
+            final.append(temp[j-k])
+            k=1
+        if(aRecouv(temp[j-k],temp[j]) == 1):
+            k=k+1
+
+currFile = ""
+temp = []
+finalresults = []
+for i in np.arange(0,len(results)):
+    if(currFile == results[i][0]):
+        temp.append(results[i])
+    elif(currFile != results[i][0]):
+        if(len(temp)==1):
+            finalresults.append(temp[0])
+        elif(len(temp)!=0):
+            addFinal(temp,finalresults)
+        temp=[]
+        currFile=results[i][0]
+        temp.append(results[i])
+    if(i==len(results)-1):
+        if(len(temp)==1):
+            finalresults.append(temp[0])
+        elif(len(temp)!=0):
+            addFinal(temp,finalresults)
+   
+for i in np.arange(0,len(finalresults)):
+    displayim(pathTest+'\\'+finalresults[i][0]+".jpg",finalresults[i])
+    
+    
