@@ -173,3 +173,90 @@ print(taux2)
 print("Starting detection on test images")
 
 #Prédictions positives sur les images de test
+
+for f in filesTest:
+    img = util.img_as_float(color.rgb2gray(io.imread(pathTest + "\\" + f)))
+    print(f)
+    for rc in rescalesTest:
+        size = (math.floor(img.shape[0]*rc), math.floor(img.shape[1]*rc))
+        if(size[0]<heightWindow or size[1]<widthWindow):
+            size=(heightWindow,widthWindow)
+        imgrs = transform.resize(img,size,mode='constant',order=0)
+        stepX = math.floor((imgrs.shape[0]-heightWindow)/nbStepH)
+        if (stepX==0):
+            stepX=1
+        for X in np.arange(0,imgrs.shape[1]-widthWindow,stepX):
+            stepY = math.floor((imgrs.shape[0]-heightWindow)/nbStepH)
+            if (stepY==0):
+                stepY=1
+            for Y in np.arange(0,imgrs.shape[0]-heightWindow,stepY):
+                window = [extractWindow(imgrs,X,Y)]
+                predict = clf.predict_proba(window)[0,1]
+                if predict > seuilDetectTest:
+                    filenum = f.split('.')[0]
+                    results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc),predict])
+
+print("Detection done !")
+
+
+
+def displayim(pathIm,lab):
+    im = Image.open(pathIm)
+    imdr = ImageDraw.Draw(im)
+    imdr.line([(lab[1],lab[2]),(lab[1]+lab[3],lab[2])], (0,200,255), width=5)
+    imdr.line([(lab[1],lab[2]),(lab[1],lab[2]+lab[4])], (0,200,255), width=5)
+    imdr.line([(lab[1],lab[2]+lab[4]),(lab[1]+lab[3],lab[2]+lab[4])], (0,200,255), width=5)
+    imdr.line([(lab[1]+lab[3],lab[2]),(lab[1]+lab[3],lab[2]+lab[4])], (0,200,255), width=5)
+    im.show()
+"""
+for i in np.arange(0,len(results)):
+    displayim(pathTest+'\\'+results[i][0]+".jpg",results[i])
+"""
+def aRecouv(bi,bj):
+    maxgauche=max(bi[1],bj[1])
+    mindroit=min(bi[1]+bi[3],bj[1]+bj[3])
+    minhaut=max(bi[2],bj[2])
+    maxbas=min(bi[2]+bi[4],bj[2]+bj[4])
+    if(maxgauche<mindroit and minhaut<maxbas):
+        intersect = (mindroit-maxgauche)*(maxbas-minhaut)
+        union = (bi[3]*bi[4])+(bj[3]*bj[4])-intersect
+        if(intersect/union>0.5):
+            return 1
+        else:
+            return 0
+    else:
+        return 0
+def addFinal(temp,final):
+    temp = sorted(temp,reverse=True,key=lambda x: x[5])
+    k = 1
+    for j in np.arange(1,len(temp)):
+        if(aRecouv(temp[j-k],temp[j]) == 0):
+            final.append(temp[j-k])
+            k=1
+        if(aRecouv(temp[j-k],temp[j]) == 1):
+            k=k+1
+
+currFile = ""
+temp = []
+finalresults = []
+for i in np.arange(0,len(results)):
+    if(currFile == results[i][0]):
+        temp.append(results[i])
+    elif(currFile != results[i][0]):
+        if(len(temp)==1):
+            finalresults.append(temp[0])
+        elif(len(temp)!=0):
+            addFinal(temp,finalresults)
+        temp=[]
+        currFile=results[i][0]
+        temp.append(results[i])
+    if(i==len(results)-1):
+        if(len(temp)==1):
+            finalresults.append(temp[0])
+        elif(len(temp)!=0):
+            addFinal(temp,finalresults)
+   
+for i in np.arange(0,len(finalresults)):
+    displayim(pathTest+'\\'+finalresults[i][0]+".jpg",finalresults[i])
+    
+    
