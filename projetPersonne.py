@@ -14,22 +14,22 @@ from sklearn import metrics
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import ShuffleSplit
 from sklearn.utils import shuffle
-from skimage import io, util, color, feature, transform
+from skimage import io, util, color, feature, transform,exposure
 import os, os.path
 from PIL import ImageDraw
 from PIL import Image
 
 #Paths
 
-path="C:\\Users\\Bastien\\Desktop\\projetPers"
+path="D:\\Bureau\\projetPers"
 pathTrain = path+"\\train"
 pathTest = path+"\\test"
 
 #Parameters
-heightWindow = 160
-widthWindow = 70
-nbStepW = 7
-nbStepH = 9
+heightWindow = 140
+widthWindow = 60
+nbStepW = 8
+nbStepH = 10
 nbWindows = 2
 rescales = np.arange(0.5,2,0.5)
 rescalesTrain = np.arange(3/6,1.5,1/6)
@@ -37,19 +37,19 @@ rescalesTest = np.arange(1/6,1.5,1/6)
 
 #Hog params
 orientation = 8
-pixelPerCell= (8,8)
+pixelPerCell= (20,20)
 cellsPerBlock = (1,1)
 #clfParams
-CTrain = 5
-CTest = 5
+CTrain = 10
+CTest = 10
 validCroiseeFolds = 5
-seuilDetect = 0.7
+seuilDetect = 0.6
 seuilDetectTest = 0.5
 
 #Extrait une sous image à partir de l'image passé en paramètre
 def extractWindow(im,x,y):
     window = im[y:(y+heightWindow),x:(x+widthWindow)]
-    window = feature.hog(window, orientations=orientation, pixels_per_cell=pixelPerCell,cells_per_block=cellsPerBlock, visualise=True)[1]
+    window = feature.hog(window, orientations=orientation, pixels_per_cell=pixelPerCell,block_norm='L2-Hys',cells_per_block=cellsPerBlock, visualise=True)[1]
     window = window.reshape(widthWindow*heightWindow)
     return window
 
@@ -65,6 +65,20 @@ def valid_crois(x,y,clf,nb):
         taux = np.mean(clf.predict(xtest) != ytest)
         res[i-1]=taux
     return res  
+def aRecouv(bi,bj,seuil):
+    maxgauche=max(bi[1],bj[1])
+    mindroit=min(bi[1]+bi[3],bj[1]+bj[3])
+    minhaut=max(bi[2],bj[2])
+    maxbas=min(bi[2]+bi[4],bj[2]+bj[4])
+    if(maxgauche<mindroit and minhaut<maxbas):
+        intersect = (mindroit-maxgauche)*(maxbas-minhaut)
+        union = (bi[3]*bi[4])+(bj[3]*bj[4])-intersect
+        if(intersect/union>seuil):
+            return 1
+        else:
+            return 0
+    else:
+        return 0
     
 files = os.listdir(pathTrain)
 filesTest = os.listdir(pathTest)
@@ -96,7 +110,7 @@ for f in files:
     currLabel = vect[j]
     window = img[currLabel[2]:currLabel[2]+currLabel[4],currLabel[1]:currLabel[1]+currLabel[3]]
     window = transform.resize(window,(heightWindow,widthWindow),mode='constant' ,order=0)
-    window = feature.hog(window, orientations=orientation, pixels_per_cell=pixelPerCell,cells_per_block=cellsPerBlock, visualise=True)[1]
+    window = feature.hog(window, orientations=orientation, pixels_per_cell=pixelPerCell,block_norm='L2-Hys',cells_per_block=cellsPerBlock, visualise=True)[1]
     windows[j+len(files)*nbWindows*len(rescales)] = window.reshape(widthWindow*heightWindow)
     j=j+1
 
@@ -140,11 +154,10 @@ for f in files:
                 window = [extractWindow(imgrs,X,Y)]
                 predict = clf.predict_proba(window)[0,1]
                 if predict > seuilDetect:
-                    labelRescaled = rc * currLabel[1:5]
+                    labelRescaled = rc * currLabel
                     airCommun = abs(X+widthWindow-labelRescaled[0]) * abs(Y+heightWindow-labelRescaled[1])
-                    airLabel = labelRescaled[2] * labelRescaled[3]
-                    
-                    if(airCommun <= 0.6 * airLabel):
+                    label2 = [f.split('.')[0],X,Y,widthWindow,heightWindow]
+                    if(aRecouv(label2,labelRescaled,0.7) == 0):
                         fakeWindows.append(window[0])
                         #filenum = f.split('.')[0]
                         #results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc)])
@@ -157,12 +170,12 @@ label = np.concatenate((label,labelFake))
 print("False positives added")
 print("Training new classifier")
 
-clf = svm.SVC(kernel='linear', probability=True,C=CTest)
+clfTest = svm.SVC(kernel='linear', probability=True,C=CTest)
 n_samples = windows.shape[0]
 #cv = ShuffleSplit(n_splits=5, test_size=0.3, random_state=0)
 #cross_val_score(clf, windows, label, cv=cv)
 windows, label = shuffle(windows,label, random_state=0)
-taux2 = valid_crois(windows,label,clf,validCroiseeFolds)
+taux2 = valid_crois(windows,label,clfTest,validCroiseeFolds)
 #clf.fit(windows,label)
 results = []
 
@@ -174,7 +187,7 @@ print("Starting detection on test images")
 
 #Prédictions positives sur les images de test
 
-for f in filesTest:
+for f in filesTest[1:10]:
     img = util.img_as_float(color.rgb2gray(io.imread(pathTest + "\\" + f)))
     print(f)
     for rc in rescalesTest:
@@ -191,8 +204,9 @@ for f in filesTest:
                 stepY=1
             for Y in np.arange(0,imgrs.shape[0]-heightWindow,stepY):
                 window = [extractWindow(imgrs,X,Y)]
-                predict = clf.predict_proba(window)[0,1]
-                if predict > seuilDetectTest:
+                predict = clfTest.predict_proba(window)
+                print(predict)
+                if predict[0,1] > seuilDetectTest:
                     filenum = f.split('.')[0]
                     results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc),predict])
 
@@ -212,28 +226,15 @@ def displayim(pathIm,lab):
 for i in np.arange(0,len(results)):
     displayim(pathTest+'\\'+results[i][0]+".jpg",results[i])
 """
-def aRecouv(bi,bj):
-    maxgauche=max(bi[1],bj[1])
-    mindroit=min(bi[1]+bi[3],bj[1]+bj[3])
-    minhaut=max(bi[2],bj[2])
-    maxbas=min(bi[2]+bi[4],bj[2]+bj[4])
-    if(maxgauche<mindroit and minhaut<maxbas):
-        intersect = (mindroit-maxgauche)*(maxbas-minhaut)
-        union = (bi[3]*bi[4])+(bj[3]*bj[4])-intersect
-        if(intersect/union>0.5):
-            return 1
-        else:
-            return 0
-    else:
-        return 0
+
 def addFinal(temp,final):
     temp = sorted(temp,reverse=True,key=lambda x: x[5])
     k = 1
     for j in np.arange(1,len(temp)):
-        if(aRecouv(temp[j-k],temp[j]) == 0):
+        if(aRecouv(temp[j-k],temp[j],0.5) == 0):
             final.append(temp[j-k])
             k=1
-        if(aRecouv(temp[j-k],temp[j]) == 1):
+        if(aRecouv(temp[j-k],temp[j],0.5) == 1):
             k=k+1
 
 currFile = ""
