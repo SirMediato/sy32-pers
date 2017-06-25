@@ -26,27 +26,26 @@ pathTrain = path+"\\train"
 pathTest = path+"\\test"
 
 #Parameters
-heightWindow = 165
-widthWindow = 70
-nbStepW = 5
-nbStepH = 7
+heightWindow = 180
+widthWindow = 80
+nbStepW = 10
+nbStepH = 12
 nbStepWTest = 10
 nbStepHTest = 12
-nbWindows = 1
-rescales = np.arange(1/6,6/6,1/6)
-rescalesTrain = np.arange(1/6,6/6,1/6)
-rescalesTest = np.arange(1/6,9/6,1/6)
+nbWindows = 4
+rescales = np.arange(1/6,8/6,1/6)
+rescalesTrain = np.arange(1/6,9/6,1/6)
+rescalesTest = np.arange(1/6,7/6,1/6)
 
 #Hog params
 orientation = 9
-pixelPerCell= (5,5)
+pixelPerCell= (2,2)
 cellsPerBlock = (1,1)
 #clfParams
-CTrain = 5
-CTest = 5
+CTrain = 8
+CTest = 8
 validCroiseeFolds = 5
-seuilDetect = 0.6
-seuilDetectTest = 0.4
+
 
 #Extrait une sous image à partir de l'image passé en paramètre
 def extractWindow(im,x,y):
@@ -160,10 +159,27 @@ def non_max_suppression(boxes, overlapThresh):
         retList.append([str(int(boxes[i,0])).zfill(3),int(boxes[i,1]),int(boxes[i,2]),int(boxes[i,3]),int(boxes[i,4]),boxes[i,5]])
     return retList
     
-
+def removeRealWindows(detections,correction):
+    fakeWin = []
+    for i in np.arange(0,len(detections)):
+        numFile = int(detections[i][0])
+        corr = correction[numFile]
+        X1,Y1,W1,H1 = detections[i][1],detections[i][2],detections[i][3],detections[i][4]
+        X2,Y2,W2,H2 = corr[1],corr[2],corr[3],corr[4]
+        if (X1>X2 and X1+W1<X2+W2 and Y1>Y2 and Y1+H1<Y2+H2):#Si la boite est entièrement contenue dans la vraie (=boite trop petite)
+            fakeWin.append(detections[i])
+        elif (X1+W1<X2 or X2+W2<X1 or Y1+H1<Y2 or Y2+H2<Y1):#Si il n'y a pas d'intersection
+            fakeWin.append(detections[i])
+    return fakeWin
     
-    
-
+def isRealWindow(corr,x,y,h,w):
+    X1,Y1,W1,H1 = x,y,w,h
+    X2,Y2,W2,H2 = corr[1],corr[2],corr[3],corr[4]
+    if (X1>X2 and X1+W1<X2+W2 and Y1>Y2 and Y1+H1<Y2+H2):#Si la boite est entièrement contenue dans la vraie (=boite trop petite)
+        return 0
+    elif (X1+W1<X2 or X2+W2<X1 or Y1+H1<Y2 or Y2+H2<Y1):#Si il n'y a pas d'intersection
+        return 0
+    return 1
     
     
     
@@ -181,11 +197,12 @@ with open(path+'\\label.txt') as f:
        vect[i,:] = l.strip().split(" ")
        i=i+1
 vect = vect.astype(int)
-n = len(files)*nbWindows*len(rescales)+len(files)
+n = len(files)*nbWindows*len(rescales)
 splitWin = (math.floor(widthWindow/pixelPerCell[0]),math.floor(heightWindow/pixelPerCell[1]))
 sizeWindow = splitWin[0]*splitWin[1]*orientation
-windows = np.zeros((n,sizeWindow))
-label = np.concatenate((-1*np.ones((len(files)*nbWindows*len(rescales))),1*np.ones(len(files))),axis=0)
+randomWindows = np.zeros((n,sizeWindow))
+trueWindows = np.zeros((len(files),sizeWindow))
+
 
 
 #On créé et stocke des fenetres de taille différente aléatoires pour faire des exemples négatifs et positifs
@@ -201,15 +218,19 @@ for f in files:
         for p in np.arange(0,nbWindows):
            X = math.floor(random.random()*(imgrs.shape[1]-widthWindow))
            Y = math.floor(random.random()*(imgrs.shape[0]-heightWindow))
-           windows[i] = extractWindow(imgrs,X,Y)
-           i = i +1
+           #On vérifie qu'elles ne sont pas des bonnes detections
+           if (isRealWindow(vect[j],math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc)) !=1):
+               randomWindows[i] = extractWindow(imgrs,X,Y)
+               i = i +1
     currLabel = vect[j]
     window = img[currLabel[2]:currLabel[2]+currLabel[4],currLabel[1]:currLabel[1]+currLabel[3]]
     window = transform.resize(window,(heightWindow,widthWindow),mode='constant' ,order=0)
     window = feature.hog(window, orientations=orientation, pixels_per_cell=pixelPerCell,cells_per_block=cellsPerBlock)
-    windows[j+len(files)*nbWindows*len(rescales)] = window
+    trueWindows[j]= window
     j=j+1
-
+randomWindows = np.delete(randomWindows,np.arange(i,len(randomWindows)),axis=0)
+windows = np.concatenate((randomWindows,trueWindows),axis=0)
+label = np.concatenate((-1*np.ones((len(randomWindows))),1*np.ones(len(trueWindows))),axis=0)
 print("First windows done")
 #On ajoute les exemples positifs
 print("Starting first training")
@@ -221,7 +242,7 @@ n_samples = windows.shape[0]
 windows, label = shuffle(windows,label, random_state=0)
 taux = valid_crois(windows,label,clf,validCroiseeFolds)
 #clf.fit(windows,label)
-fakeWindows = []
+
 
 print("First Training Done")
 print("Error rate first training :")
@@ -229,11 +250,12 @@ print(taux)
 i = 0
 j = 0
 print("Starting false positives detection")
-testFalse = []
+
+nb = len(files)*len(rescalesTrain)*nbStepW*nbStepH
+fakeWindows = np.zeros((nb,sizeWindow))
 #Prédictions négatives sur les images de test
 for f in files:
     img = util.img_as_float(color.rgb2gray(io.imread(pathTrain + "\\" + f)))
-    currLabel = vect[j]
     print(f)
     for rc in rescalesTrain:
         size = (math.floor(img.shape[0]*rc), math.floor(img.shape[1]*rc))
@@ -248,19 +270,18 @@ for f in files:
             if (stepY==0):
                 stepY=1
             for Y in np.arange(0,imgrs.shape[0]-heightWindow,stepY):
-                window = [extractWindow(imgrs,X,Y)]
-                predict = clf.predict(window)
-                if predict == 1:
-                    labelRescaled = rc * currLabel
-                    airCommun = abs(X+widthWindow-labelRescaled[0]) * abs(Y+heightWindow-labelRescaled[1])
-                    label2 = [f.split('.')[0],X,Y,widthWindow,heightWindow]
-                    if(aRecouv(label2,labelRescaled,0.6) == 0):
-                        fakeWindows.append(window[0])
+                if (isRealWindow(vect[j],math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc)) !=1):
+                    window = [extractWindow(imgrs,X,Y)]
+                    predict = clf.predict(window)
+                    if predict == 1:
+                        fakeWindows[i] = window[0]
+                        i=i+1
                         #filenum = f.split('.')[0]
                         #results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc)])
     j=j+1
-     
-fakeWindows = np.asarray(fakeWindows)
+
+fakeWindows = np.delete(fakeWindows,np.arange(i,len(fakeWindows)),axis=0)
+#fakeWindows = np.asarray(fakeWindows)
 windows = np.concatenate((windows,fakeWindows))
 labelFake = -1*np.ones((len(fakeWindows)))
 label = np.concatenate((label,labelFake))
@@ -303,8 +324,8 @@ for f in filesTest:
             for Y in np.arange(0,imgrs.shape[0]-heightWindow,stepY):
                 window = [extractWindow(imgrs,X,Y)]
                 predict = clfTest.predict_proba(window)[0,1]
-                #pred = clfTest.predict(window)
-                if predict >= 0.08:
+                pred = clfTest.predict(window)
+                if pred == 1:
                     filenum = f.split('.')[0]
                     results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc),predict])
 
@@ -314,7 +335,7 @@ print("Detection done !")
 
 
 
-
+"""
 currFile = ""
 temp = []
 
@@ -343,7 +364,7 @@ for i in np.arange(0,len(finalresults2)):
     
 writeResults(finalresults2)
 
-"""
+
 currFile = ""
 temp = []
 
@@ -370,7 +391,7 @@ for i in np.arange(0,len(finalresults)):
 
 
 writeResults(finalresults)
-
+"""
 currFile = ""
 temp = []
 
@@ -395,4 +416,3 @@ for i in np.arange(0,len(nmfinalresults)):
 
 
 writeResults(nmfinalresults)
-"""
