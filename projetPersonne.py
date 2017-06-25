@@ -251,8 +251,7 @@ i = 0
 j = 0
 print("Starting false positives detection")
 
-nb = len(files)*len(rescalesTrain)*nbStepW*nbStepH
-fakeWindows = np.zeros((nb,sizeWindow))
+fakeWindows = []
 #Prédictions négatives sur les images de test
 for f in files:
     img = util.img_as_float(color.rgb2gray(io.imread(pathTrain + "\\" + f)))
@@ -274,18 +273,18 @@ for f in files:
                     window = [extractWindow(imgrs,X,Y)]
                     predict = clf.predict(window)
                     if predict == 1:
-                        fakeWindows[i] = window[0]
+                        fakeWindows.append(window[0])
                         i=i+1
                         #filenum = f.split('.')[0]
                         #results.append([filenum,math.floor(X/rc),math.floor(Y/rc),math.floor(widthWindow/rc),math.floor(heightWindow/rc)])
     j=j+1
 
-fakeWindows = np.delete(fakeWindows,np.arange(i,len(fakeWindows)),axis=0)
-#fakeWindows = np.asarray(fakeWindows)
+fakeWindows = np.asarray(fakeWindows)
 windows = np.concatenate((windows,fakeWindows))
 labelFake = -1*np.ones((len(fakeWindows)))
 label = np.concatenate((label,labelFake))
 print("False positives added")
+print(str(len(fakeWindows))+" false positives found")
 print("Training new classifier")
 
 clfTest = svm.SVC(kernel='linear', probability=True,C=CTest)
